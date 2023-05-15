@@ -79,6 +79,8 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
                              OutputVec &outputVec,
                              int multiThreadLevel)
 {
+  // TODO: REMEMBER TO FREE ALL THE THREAD CONTEXTS, AND MAKE SURE THEY;RE
+  //  DYNAMIC
   auto threads = new pthread_t[multiThreadLevel];
   auto contexts = new ThreadContext *[multiThreadLevel];
   auto *intVec = new IntermediateVec ();
