@@ -3,24 +3,41 @@
 
 #include "resources/MapReduceClient.h"
 
-typedef void* JobHandle;
+typedef void *JobHandle;
 
-enum stage_t {UNDEFINED_STAGE=0, MAP_STAGE=1, SHUFFLE_STAGE=2, REDUCE_STAGE=3};
+enum stage_t
+{
+    UNDEFINED_STAGE = 0, MAP_STAGE = 1, SHUFFLE_STAGE = 2, REDUCE_STAGE = 3
+};
 
-typedef struct {
-	stage_t stage;
-	float percentage;
+typedef struct
+{
+    stage_t stage;
+    float percentage;
 } JobState;
 
 /*
- *
+ * The function receives as input intermediary element (K2, V2) and context
+ * which contains data structure of the thread that created the intermediary
+ * element. The function saves the intermediary element in the context data
+ * structures. In addition, the function updates the number of intermediary
+ * elements using atomic counter. Please pay attention that emit2 is called
+ * from the client's map function and the context is passed from the
+ * framework to the client's map function as parameter.
  */
-void emit2 (K2* key, V2* value, void* context);
+void emit2 (K2 *key, V2 *value, void *context);
 
 /*
- *
+ * The function receives as input output element (K3, V3) and context which
+ * contains data structure of the thread that created the output element.
+ * The function saves the output element in the context data structures
+ * (output vector). In addition, the function updates the number of output
+ * elements using atomic counter. Please pay attention that emit3 is called
+ * from the client's reduce function and the context is passed from the
+ * framework to the client's map function as parameter.
+
  */
-void emit3 (K3* key, V3* value, void* context);
+void emit3 (K3 *key, V3 *value, void *context);
 
 /*
  * This function starts running the MapReduce algorithm (with several
@@ -46,9 +63,9 @@ void emit3 (K3* key, V3* value, void* context);
  *
  * You can assume that the input to this function is valid
  */
-JobHandle startMapReduceJob(const MapReduceClient& client,
-	const InputVec& inputVec, OutputVec& outputVec,
-	int multiThreadLevel);
+JobHandle startMapReduceJob (const MapReduceClient &client,
+                             const InputVec &inputVec, OutputVec &outputVec,
+                             int multiThreadLevel);
 
 /*
  * a function gets JobHandle returned by startMapReduceFramework and waits
@@ -59,17 +76,23 @@ JobHandle startMapReduceJob(const MapReduceClient& client,
  * Pay attention that calling pthread_join twice from the same process has
  * undefined behavior and you must avoid that.
  */
-void waitForJob(JobHandle job);
+void waitForJob (JobHandle job);
 
 /*
- *
+ * this function gets a JobHandle and updates the state of the job into the
+ * given JobState struct
  */
-void getJobState(JobHandle job, JobState* state);
+void getJobState (JobHandle job, JobState *state);
 
 /*
- *
+ * Releasing all resources of a job. You should prevent releasing resources
+ * before the job finished. After this function is called the job handle will
+ * be invalid.
+ * In case that the function is called and the job is not finished yet wait
+ * until the job is finished to close it.
+ * In order to release mutexes and semaphores (pthread_mutex, sem_t) you
+ * should use the functions pthread_mutex_destroy, sem_destroy.
  */
-void closeJobHandle(JobHandle job);
-	
-	
+void closeJobHandle (JobHandle job);
+
 #endif //MAPREDUCEFRAMEWORK_H
