@@ -51,13 +51,25 @@ K2 *get_max_value (ThreadContext *tc)
   K2 *max_value = nullptr;
   for (int i = 0; i < tc->multiThreadLevel; i++)
   {
-    if (!tc->thread_contexts[i].intVec->empty ())
+    if (!(tc->thread_contexts[i].intVec->empty ()))
     {
+        /*
       if (max_value == nullptr
-          | max_value < tc->thread_contexts[i].intVec->back ().first)
+          | *max_value < *(tc->thread_contexts[i].intVec->back ().first))
       {
         max_value = tc->thread_contexts[i].intVec->back ().first;
       }
+         */
+
+        if(max_value == nullptr) {
+            max_value = tc->thread_contexts[i].intVec->back ().first;
+        } else {
+
+            if(*max_value < *(tc->thread_contexts[i].intVec->back ().first)) {
+                max_value = tc->thread_contexts[i].intVec->back ().first;
+            }
+
+        }
     }
   }
 
@@ -100,7 +112,7 @@ comparePairs (const std::pair<K2 *, V2 *> &pair1, const std::pair<K2 *, V2 *> &p
 
 void *singleThread (void *arg)
 {
-  ThreadContext *tc = (ThreadContext *) arg;
+  ThreadContext *tc = *((ThreadContext **) arg);
 
   if (tc->threadId == 0)
   {
@@ -108,8 +120,15 @@ void *singleThread (void *arg)
   }
 
   // map
+
+  /*
   int old_value = tc->atomic_counter->load ();
   (*(tc->atomic_counter))++;
+   */
+
+  int old_value = tc->atomic_counter->fetch_add(1);
+
+
   auto pair = tc->inputVec->at (old_value);
   tc->client.map (pair.first, pair.second, tc);
 
@@ -162,6 +181,8 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
 
   auto *outVec = new OutputVec ();
   auto atomic_counter = new std::atomic<int> (0);
+
+
   pthread_mutex_t mutex (PTHREAD_MUTEX_INITIALIZER);
   stage_t stage = UNDEFINED_STAGE;
 
@@ -178,10 +199,6 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
     contexts[i]->multiThreadLevel = multiThreadLevel;
   }
 
-  for (int i = 0; i < multiThreadLevel; ++i)
-  {
-    pthread_create (threads + i, NULL, singleThread, contexts + i);
-  }
 
   auto *job_handler = new job_handler_t ();
   job_handler->threads = threads;
@@ -191,6 +208,24 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
   job_handler->multiThreadLevel = multiThreadLevel;
   job_handler->isJobDone = false;
   job_handler->mutex = &mutex;
+
+
+  for (int i = 0; i < multiThreadLevel; i++)
+  {
+    pthread_create (threads + i, NULL, singleThread, contexts + i);
+  }
+
+
+  /*
+  auto *job_handler = new job_handler_t ();
+  job_handler->threads = threads;
+  job_handler->contexts = *contexts;
+  job_handler->barrier = barrier;
+  job_handler->outVec = outVec;
+  job_handler->multiThreadLevel = multiThreadLevel;
+  job_handler->isJobDone = false;
+  job_handler->mutex = &mutex;
+  */
   return job_handler;
 }
 
@@ -236,7 +271,11 @@ void emit2 (K2 *key, V2 *value, void *context)
   auto intPair = IntermediatePair (key, value);
   ThreadContext *tc = (ThreadContext *) context;
 
+
+
   tc->intVec->push_back (intPair);
+
+
 }
 
 void emit3 (K3 *key, V3 *value, void *context)
