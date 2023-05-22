@@ -1,7 +1,7 @@
 #ifndef MAPREDUCEFRAMEWORK_H
 #define MAPREDUCEFRAMEWORK_H
 
-#include "resources/MapReduceClient.h"
+#include "MapReduceClient.h"
 
 typedef void *JobHandle;
 
