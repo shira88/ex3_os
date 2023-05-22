@@ -3,13 +3,13 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstdio>
-#include <array>
+#include <algorithm>
 #include "MapReduceFramework.h"
 
 class ThreadContext
 {
  public:
-  std::pair<K1 *, V1 *> pair;
+  const InputVec *inputVec;
   Barrier *barrier{};
   const MapReduceClient &client;
   IntermediateVec *intVec;
@@ -18,13 +18,17 @@ class ThreadContext
   int threadId;
   pthread_mutex_t *mutex;
   stage_t stage;
+  ThreadContext *thread_contexts;
+  int multiThreadLevel;
+  std::vector<IntermediateVec> *shuffled;
 
-  ThreadContext (const MapReduceClient &client, IntermediateVec
-  *intVec, int threadId, OutputVec *outVec, std::atomic<int> *
-  atomic_counter, pthread_mutex_t *mutex, stage_t stage)
-      : client (client), intVec (intVec), threadId (threadId), outVec
-      (outVec), atomic_counter (atomic_counter), mutex (mutex), stage (stage)
+  ThreadContext (const MapReduceClient &client, int threadId, OutputVec *outVec, std::atomic<int> *
+  atomic_counter, pthread_mutex_t *mutex, stage_t stage, const InputVec *inputVec)
+      : client (client), threadId (threadId), outVec
+      (outVec), atomic_counter (atomic_counter), mutex (mutex), stage
+            (stage), inputVec (inputVec)
   {
+    intVec = new IntermediateVec ();
   }
 
   ~ThreadContext () = default;
@@ -42,7 +46,59 @@ struct job_handler_t
     pthread_mutex_t *mutex;
 };
 
-void *singleThread (void *arg) // TODO continue
+K2 *get_max_value (ThreadContext *tc)
+{
+  K2 *max_value = nullptr;
+  for (int i = 0; i < tc->multiThreadLevel; i++)
+  {
+    if (!tc->thread_contexts[i].intVec->empty ())
+    {
+      if (max_value == nullptr
+          | max_value < tc->thread_contexts[i].intVec->back ().first)
+      {
+        max_value = tc->thread_contexts[i].intVec->back ().first;
+      }
+    }
+  }
+
+  return max_value;
+}
+
+std::vector<IntermediateVec> *shuffle (ThreadContext *tc)
+{
+  auto vec = new std::vector<IntermediateVec> ();
+  K2 *max_value = get_max_value (tc);
+
+  while (max_value != nullptr)
+  {
+    auto k_vec = new IntermediateVec ();
+
+    for (int i = 0; i < tc->multiThreadLevel; i++)
+    {
+      while ((!tc->thread_contexts[i].intVec->empty ()) &&
+             (tc->thread_contexts[i]
+                  .intVec->back ().first == max_value))
+      {
+        k_vec->push_back (tc->thread_contexts[i].intVec->back ());
+        tc->thread_contexts[i].intVec->pop_back ();
+      }
+    }
+    vec->push_back (*k_vec);
+    (*(tc->atomic_counter))++;
+    max_value = get_max_value (tc);
+  }
+  return vec;
+}
+
+template<typename K2, typename V2>
+bool
+comparePairs (const std::pair<K2 *, V2 *> &pair1, const std::pair<K2 *, V2 *> &pair2)
+{
+  // Compare the K2 values of the pairs
+  return *(pair1.first) < *(pair2.first);
+}
+
+void *singleThread (void *arg)
 {
   ThreadContext *tc = (ThreadContext *) arg;
 
@@ -50,26 +106,43 @@ void *singleThread (void *arg) // TODO continue
   {
     tc->stage = MAP_STAGE;
   }
-  // map + sort
-  tc->client.map (tc->pair.first, tc->pair.second, tc);
+
+  // map
+  int old_value = tc->atomic_counter->load ();
+  (*(tc->atomic_counter))++;
+  auto pair = tc->inputVec->at (old_value);
+  tc->client.map (pair.first, pair.second, tc);
+
+  // sort
+  std::sort (tc->intVec->begin (), tc->intVec->end (), comparePairs<K2, V2>);
 
   tc->barrier->barrier ();
 
   if (tc->threadId == 0)
   {
     tc->stage = SHUFFLE_STAGE;
-    shuffle ();
+    tc->atomic_counter->store (0);
+    auto shuffled = shuffle (tc);
+
+    for (int i = 0; i < tc->multiThreadLevel; i++)
+    {
+      tc->thread_contexts[i].shuffled = shuffled;
+    }
   }
 
+  // TODO: it is recommended to use semaphore instead of barrier here
   tc->barrier->barrier ();
 
+  // reduce
   if (tc->threadId == 0)
   {
     tc->stage = REDUCE_STAGE;
   }
 
-  // reduce
-  tc->client.reduce (tc->intVec, tc);
+  old_value = tc->atomic_counter->load () - 1;
+  (*(tc->atomic_counter))--;
+  auto reduce_vec = tc->shuffled->at (old_value);
+  tc->client.reduce (&reduce_vec, tc);
 
   return 0;
 }
@@ -83,24 +156,26 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
   //  DYNAMIC
   auto threads = new pthread_t[multiThreadLevel];
   auto contexts = new ThreadContext *[multiThreadLevel];
-  auto *intVec = new IntermediateVec ();
+
+  //NEED MULTIPE INTERMEDIATE VECTORS
+  //auto *intVec = new IntermediateVec ();
+
   auto *outVec = new OutputVec ();
   auto atomic_counter = new std::atomic<int> (0);
   pthread_mutex_t mutex (PTHREAD_MUTEX_INITIALIZER);
   stage_t stage = UNDEFINED_STAGE;
 
-  for (int i = 0; i < multiThreadLevel; i++)
-  {
-    contexts[i] = new ThreadContext (client, intVec, i, outVec,
-                                     atomic_counter, &mutex, stage);
-  }
-
   auto *barrier = new Barrier (multiThreadLevel);
 
-  for (int i = 0; i < multiThreadLevel; ++i)
+  for (int i = 0; i < multiThreadLevel; i++)
   {
-    contexts[i]->pair = inputVec[i];
+
+    contexts[i] = new ThreadContext (client, i, outVec,
+                                     atomic_counter, &mutex, stage, &
+                                         inputVec);
     contexts[i]->barrier = barrier;
+    contexts[i]->thread_contexts = *contexts;
+    contexts[i]->multiThreadLevel = multiThreadLevel;
   }
 
   for (int i = 0; i < multiThreadLevel; ++i)
@@ -112,12 +187,11 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
   job_handler->threads = threads;
   job_handler->contexts = *contexts;
   job_handler->barrier = barrier;
-  job_handler->intVec = intVec;
   job_handler->outVec = outVec;
   job_handler->multiThreadLevel = multiThreadLevel;
   job_handler->isJobDone = false;
   job_handler->mutex = &mutex;
-  return job_handler_t;
+  return job_handler;
 }
 
 void waitForJob (JobHandle job)
@@ -145,12 +219,14 @@ void getJobState (JobHandle job, JobState *state)
 
 void closeJobHandle (JobHandle job)
 {
+  //TODO DELETE EVERYTHING ACCORDING TO WHAT WE CHANGED, AND KNOW WHAT TO
+  // FREE FROM THE THREAD CONTEXTS AND WHAT NOT
+
   waitForJob (job);
   auto handler = (job_handler_t *) job;
   delete[] handler->threads;
   delete[] handler->contexts;
   delete handler->barrier;
-  delete[] handler->intVec;
   delete[] handler->outVec;
   pthread_mutex_destroy (handler->mutex);
 }
@@ -159,20 +235,8 @@ void emit2 (K2 *key, V2 *value, void *context)
 {
   auto intPair = IntermediatePair (key, value);
   ThreadContext *tc = (ThreadContext *) context;
-  if (pthread_mutex_lock (tc->mutex) != 0)
-  {
-    fprintf (stderr, "system error: error on pthread_mutex_lock");
-    exit (1);
-  }
 
   tc->intVec->push_back (intPair);
-  (*(tc->atomic_counter))++;
-
-  if (pthread_mutex_unlock (tc->mutex) != 0)
-  {
-    fprintf (stderr, "system error: error on pthread_mutex_unlock");
-    exit (1);
-  }
 }
 
 void emit3 (K3 *key, V3 *value, void *context)
@@ -188,7 +252,6 @@ void emit3 (K3 *key, V3 *value, void *context)
   }
 
   tc->outVec->push_back (outPair);
-  (*(tc->atomic_counter))++;
 
   if (pthread_mutex_unlock (tc->mutex) != 0)
   {
