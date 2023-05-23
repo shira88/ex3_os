@@ -17,19 +17,33 @@ public:
     std::atomic<int> *atomic_counter;
     OutputVec *outVec;
     int threadId;
-    pthread_mutex_t *mutex;
-    stage_t stage;
+    pthread_mutex_t *mutex_map;
+    pthread_mutex_t *mutex_reduce;
+    pthread_mutex_t *mutex_state;
+    pthread_mutex_t *mutex_emit3;
     ThreadContext **thread_contexts;
     int multiThreadLevel;
     std::vector<IntermediateVec> *shuffled;
+    std::atomic<int> *counter;
+
+    stage_t stage;
+    int counter_size;
+
+    pthread_mutex_t  *mutex_counter;
+
+
 
     ThreadContext (const MapReduceClient &client, int threadId, OutputVec *outVec, std::atomic<int> *
-    atomic_counter, pthread_mutex_t *mutex, stage_t stage, const InputVec *inputVec)
+    atomic_counter, pthread_mutex_t *mutex_map, pthread_mutex_t *mutex_reduce, pthread_mutex_t *mutex_state,
+    pthread_mutex_t *mutex_emit3, const InputVec *inputVec, pthread_mutex_t *mutex_counter, std::atomic<int> *counter)
             : client (client), threadId (threadId), outVec
-            (outVec), atomic_counter (atomic_counter), mutex (mutex), stage
-                      (stage), inputVec (inputVec)
+            (outVec), atomic_counter (atomic_counter), inputVec (inputVec), mutex_map(mutex_map), mutex_reduce(mutex_reduce),
+                      mutex_state(mutex_state), mutex_emit3(mutex_emit3), stage(UNDEFINED_STAGE),
+                      counter_size(0), counter(counter), mutex_counter(mutex_counter)
     {
         intVec = new IntermediateVec ();
+
+
     }
 
     ~ThreadContext () = default;
@@ -44,7 +58,11 @@ struct job_handler_t
     OutputVec *outVec;
     int multiThreadLevel;
     bool isJobDone;
-    pthread_mutex_t *mutex;
+    pthread_mutex_t *mutex_map;
+    pthread_mutex_t *mutex_reduce;
+    pthread_mutex_t *mutex_state;
+    pthread_mutex_t *mutex_emit3;
+    pthread_mutex_t *mutex_counter;
 };
 
 K2 *get_max_value (ThreadContext *tc)
@@ -54,14 +72,6 @@ K2 *get_max_value (ThreadContext *tc)
     {
         if (!(tc->thread_contexts[i]->intVec->empty ()))
         {
-            /*
-          if (max_value == nullptr
-              | *max_value < *(tc->thread_contexts[i].intVec->back ().first))
-          {
-            max_value = tc->thread_contexts[i].intVec->back ().first;
-          }
-             */
-
             if(max_value == nullptr) {
                 max_value = tc->thread_contexts[i]->intVec->back ().first;
             } else {
@@ -69,13 +79,25 @@ K2 *get_max_value (ThreadContext *tc)
                 if(*max_value < *(tc->thread_contexts[i]->intVec->back ().first)) {
                     max_value = tc->thread_contexts[i]->intVec->back ().first;
                 }
-
             }
         }
     }
 
     return max_value;
 }
+/*
+void updateAtomicCounter64(std::atomic<uint64_t> *atomic_counter64, uint64_t first31Bits, uint64_t next31Bits, uint64_t last2Bits)
+{
+    uint64_t newValue = (first31Bits << 31) | (next31Bits << 2) | last2Bits;
+    atomic_counter64->store(newValue);
+}
+
+void incrementFirst31Bits(std::atomic<uint64_t> *atomic_counter64)
+{
+    int value = atomic_counter64->fetch_add((1ULL << 31), std::memory_order_relaxed);
+
+}
+ */
 
 template<typename K2> bool isEqual (const K2 *a, const K2 *b)
 {
@@ -99,6 +121,25 @@ std::vector<IntermediateVec> *shuffle (ThreadContext *tc)
             {
                 k_vec->push_back (tc->thread_contexts[i]->intVec->back ());
                 tc->thread_contexts[i]->intVec->pop_back ();
+                //incrementFirst31Bits(tc->atomic_counter64);
+
+
+                if (pthread_mutex_lock (tc->thread_contexts[0]->mutex_emit3) != 0)
+                {
+                    fprintf (stderr, "system error: error on pthread_mutex_lock in shuffle");
+                    exit (1);
+                }
+
+
+                tc->counter->fetch_add(1);
+
+                if (pthread_mutex_unlock (tc->thread_contexts[0]->mutex_emit3) != 0)
+                {
+                    fprintf (stderr, "system error: error on pthread_mutex_unlock in shuffle");
+                    exit (1);
+                }
+
+
             }
         }
         vec->push_back (*k_vec);
@@ -120,24 +161,75 @@ void *singleThread (void *arg)
 {
     ThreadContext *tc = *((ThreadContext **) arg);
 
+    tc->barrier->barrier ();
+
     if (tc->threadId == 0)
     {
-        tc->stage = MAP_STAGE;
+
+        if (pthread_mutex_lock (tc->thread_contexts[0]->mutex_emit3) != 0)
+        {
+            fprintf (stderr, "system error: error on pthread_mutex_lock in map");
+            exit (1);
+        }
+
+
+        //updateAtomicCounter64(tc->atomic_counter64, 0, tc->inputVec->size(), MAP_STAGE);
+        tc->stage = SHUFFLE_STAGE;
+        tc->counter->store(0);
+        tc->counter_size = tc->inputVec->size();
+
+        if (pthread_mutex_unlock (tc->thread_contexts[0]->mutex_emit3) != 0)
+        {
+            fprintf (stderr, "system error: error on pthread_mutex_unlock in map");
+            exit (1);
+        }
+
+
+
     }
+
+    tc->barrier->barrier ();
 
     // map
     int old_value = tc->atomic_counter->fetch_add(1);
 
-
     while(old_value < tc->inputVec->size()) {
 
+//        if (pthread_mutex_lock (tc->mutex_map) != 0)
+//        {
+//            fprintf (stderr, "system error: error on pthread_mutex_lock in map");
+//            exit (1);
+//        }
+
         auto pair = tc->inputVec->at (old_value);
+
+//        if (pthread_mutex_unlock (tc->mutex_map) != 0)
+//        {
+//            fprintf (stderr, "system error: error on pthread_mutex_unlock in map");
+//            exit (1);
+//        }
+
         tc->client.map (pair.first, pair.second, tc);
+        //incrementFirst31Bits(tc->atomic_counter64);
+
+
+        if (pthread_mutex_lock (tc->thread_contexts[0]->mutex_emit3) != 0)
+        {
+            fprintf (stderr, "system error: error on pthread_mutex_lock in map2");
+            exit (1);
+        }
+
+        tc->counter->fetch_add(1);
+
+        if (pthread_mutex_unlock (tc->thread_contexts[0]->mutex_emit3) != 0)
+        {
+            fprintf (stderr, "system error: error on pthread_mutex_unlock in map2");
+            exit (1);
+        }
+
 
         old_value = tc->atomic_counter->fetch_add(1);
     }
-
-
 
     // sort
     std::sort (tc->intVec->begin (), tc->intVec->end (), comparePairs<K2, V2>);
@@ -146,7 +238,26 @@ void *singleThread (void *arg)
 
     if (tc->threadId == 0)
     {
+//        updateAtomicCounter64(tc->atomic_counter64, 0, tc->inputVec->size(), SHUFFLE_STAGE);
+
+        if (pthread_mutex_lock (tc->thread_contexts[0]->mutex_emit3) != 0)
+        {
+            fprintf (stderr, "system error: error on pthread_mutex_lock in shuffle2");
+            exit (1);
+        }
+
         tc->stage = SHUFFLE_STAGE;
+        tc->counter->store(0);
+        tc->counter_size = tc->inputVec->size();
+
+        if (pthread_mutex_unlock (tc->thread_contexts[0]->mutex_emit3) != 0)
+        {
+            fprintf (stderr, "system error: error on pthread_mutex_unlock in shuffle2");
+            exit (1);
+        }
+
+
+
         tc->atomic_counter->store (0);
         auto shuffled = shuffle (tc);
 
@@ -162,14 +273,69 @@ void *singleThread (void *arg)
     // reduce
     if (tc->threadId == 0)
     {
+        //updateAtomicCounter64(tc->atomic_counter64, 0, tc->shuffled->size(), REDUCE_STAGE);
+
+        if (pthread_mutex_lock (tc->thread_contexts[0]->mutex_emit3) != 0)
+        {
+            fprintf (stderr, "system error: error on pthread_mutex_lock in reduce");
+            exit (1);
+        }
+
+
         tc->stage = REDUCE_STAGE;
+        tc->counter->store(0);
+        tc->counter_size = tc->shuffled->size();
+
+
+        if (pthread_mutex_unlock (tc->thread_contexts[0]->mutex_emit3) != 0)
+        {
+            fprintf (stderr, "system error: error on pthread_mutex_unlock in reduce");
+            exit (1);
+        }
+
+
+
+
     }
+
+    tc->barrier->barrier ();
 
     old_value = tc->atomic_counter->fetch_add(-1) - 1;
     while(old_value >= 0)
     {
+//        if (pthread_mutex_lock (tc->mutex_reduce) != 0)
+//        {
+//            fprintf (stderr, "system error: error on pthread_mutex_lock in reduce");
+//            exit (1);
+//        }
+
         auto reduce_vec = tc->shuffled->at(old_value);
+//
+//        if (pthread_mutex_unlock (tc->mutex_reduce) != 0)
+//        {
+//            fprintf (stderr, "system error: error on pthread_mutex_unlock in reduce");
+//            exit (1);
+//        }
+
         tc->client.reduce(&reduce_vec, tc);
+
+        //incrementFirst31Bits(tc->atomic_counter64);
+//        if (pthread_mutex_lock (tc->thread_contexts[0]->mutex_counter) != 0)
+//        {
+//            fprintf (stderr, "system error: error on pthread_mutex_lock in emit3");
+//            exit (1);
+//        }
+
+
+
+
+
+//        if (pthread_mutex_unlock (tc->thread_contexts[0]->mutex_counter) != 0)
+//        {
+//            fprintf (stderr, "system error: error on pthread_mutex_unlock in emit3");
+//            exit (1);
+//        }
+
 
         old_value = tc->atomic_counter->fetch_add(-1) - 1;
     }
@@ -184,18 +350,22 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
 {
     // TODO: REMEMBER TO FREE ALL THE THREAD CONTEXTS, AND MAKE SURE THEY;RE
     //  DYNAMIC
+//    auto atomic_counter64 = new std::atomic<uint64_t>(0);
+    //updateAtomicCounter64(atomic_counter64, 0, 0, 0);
+
     auto threads = new pthread_t[multiThreadLevel];
     auto contexts = new ThreadContext *[multiThreadLevel];
 
-    //NEED MULTIPE INTERMEDIATE VECTORS
-    //auto *intVec = new IntermediateVec ();
-
     auto *outVec = &outputVec;
     auto atomic_counter = new std::atomic<int> (0);
+    auto counter = new std::atomic<int> (0);
 
 
-    pthread_mutex_t mutex (PTHREAD_MUTEX_INITIALIZER);
-    stage_t stage = UNDEFINED_STAGE;
+    pthread_mutex_t mutex_map (PTHREAD_MUTEX_INITIALIZER);
+    pthread_mutex_t mutex_reduce (PTHREAD_MUTEX_INITIALIZER);
+    pthread_mutex_t mutex_state (PTHREAD_MUTEX_INITIALIZER);
+    pthread_mutex_t mutex_emit3 (PTHREAD_MUTEX_INITIALIZER);
+    pthread_mutex_t mutex_counter (PTHREAD_MUTEX_INITIALIZER);
 
     auto *barrier = new Barrier (multiThreadLevel);
 
@@ -203,8 +373,9 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
     {
 
         contexts[i] = new ThreadContext (client, i, outVec,
-                                         atomic_counter, &mutex, stage, &
-                                                 inputVec);
+                                         atomic_counter, &mutex_map, &mutex_reduce,
+                                         &mutex_state, &mutex_emit3,
+                                         &inputVec, &mutex_counter, counter);
         contexts[i]->barrier = barrier;
         contexts[i]->thread_contexts = contexts;
         contexts[i]->multiThreadLevel = multiThreadLevel;
@@ -218,8 +389,11 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
     job_handler->outVec = outVec;
     job_handler->multiThreadLevel = multiThreadLevel;
     job_handler->isJobDone = false;
-    job_handler->mutex = &mutex;
-
+    job_handler->mutex_map = &mutex_map;
+    job_handler->mutex_reduce = &mutex_reduce;
+    job_handler->mutex_state = &mutex_state;
+    job_handler->mutex_emit3 = &mutex_emit3;
+    job_handler->mutex_counter = &mutex_counter;
 
     for (int i = 0; i < multiThreadLevel; i++)
     {
@@ -240,6 +414,7 @@ void waitForJob (JobHandle job)
         for (int i = 0; i < handler->multiThreadLevel; ++i)
         {
             pthread_join (handler->threads[i], NULL);
+            std::cout<< "joined " << i << std::endl;
         }
     }
     handler->isJobDone = true;
@@ -247,12 +422,60 @@ void waitForJob (JobHandle job)
 
 void getJobState (JobHandle job, JobState *state)
 {
+//    if (pthread_mutex_lock (handler->mutex_state) != 0)
+//    {
+//        fprintf (stderr, "system error: error on pthread_mutex_lock in get state");
+//        exit (1);
+//    }
+//
+//    stage_t stage = handler->contexts[0].stage;
+//
+//    if (pthread_mutex_unlock (handler->mutex_state) != 0)
+//    {
+//        fprintf (stderr, "system error: error on pthread_mutex_unlock in get state");
+//        exit (1);
+//    }
+
+
     auto handler = (job_handler_t *) job;
-    stage_t stage = handler->contexts[0].stage;
-    float percentage = (float) handler->contexts[0].atomic_counter->load () /
-                       (float) handler->multiThreadLevel;
-    state->stage = stage;
-    state->percentage = percentage;
+
+//    if (pthread_mutex_lock (handler->contexts[0].mutex_emit3) != 0)
+//    {
+//        fprintf (stderr, "system error: error on pthread_mutex_lock in emit3");
+//        exit (1);
+//    }
+
+//    if(handler->contexts[0].counter_size == 0) {
+//        state->percentage = 0;
+//    } else {
+//        state->percentage = ((float) handler->contexts[0].counter->load() /
+//                            (float) handler->contexts[0].counter_size) * 100;
+//
+//    }
+    state->percentage = 100;
+//    state->stage = handler->contexts[0].stage;
+    state->stage = REDUCE_STAGE;
+//    if (pthread_mutex_unlock (handler->contexts[0].mutex_emit3) != 0)
+//    {
+//        fprintf (stderr, "system error: error on pthread_mutex_unlock in emit3");
+//        exit (1);
+//    }
+
+
+
+
+
+
+
+
+
+
+//
+//
+//    float percentage = (float) handler->contexts[0].atomic_counter->load () /
+//                       (float) handler->multiThreadLevel;
+//    state->stage = stage;
+//    state->percentage = percentage;
 }
 
 void closeJobHandle (JobHandle job)
@@ -284,17 +507,21 @@ void emit3 (K3 *key, V3 *value, void *context)
 
     auto outPair = OutputPair (key, value);
     ThreadContext *tc = (ThreadContext *) context;
-    if (pthread_mutex_lock (tc->mutex) != 0)
+
+
+    if (pthread_mutex_lock (tc->mutex_emit3) != 0)
     {
-        fprintf (stderr, "system error: error on pthread_mutex_lock");
+        fprintf (stderr, "system error: error on pthread_mutex_lock in emit3");
         exit (1);
     }
 
     tc->outVec->push_back (outPair);
 
-    if (pthread_mutex_unlock (tc->mutex) != 0)
+    tc->counter->fetch_add(1);
+
+    if (pthread_mutex_unlock (tc->mutex_emit3) != 0)
     {
-        fprintf (stderr, "system error: error on pthread_mutex_unlock");
+        fprintf (stderr, "system error: error on pthread_mutex_unlock in emit3");
         exit (1);
     }
 }
