@@ -128,6 +128,7 @@ void *singleThread (void *arg)
     // map
     int old_value = tc->atomic_counter->fetch_add(1);
 
+
     while(old_value < tc->inputVec->size()) {
 
         auto pair = tc->inputVec->at (old_value);
@@ -165,10 +166,12 @@ void *singleThread (void *arg)
     }
 
     old_value = tc->atomic_counter->fetch_add(-1) - 1;
-    if(old_value >= 0)
+    while(old_value >= 0)
     {
         auto reduce_vec = tc->shuffled->at(old_value);
         tc->client.reduce(&reduce_vec, tc);
+
+        old_value = tc->atomic_counter->fetch_add(-1) - 1;
     }
 
     return 0;
