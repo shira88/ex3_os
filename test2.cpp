@@ -4,7 +4,7 @@
  * InputPair and the number of threads.
  */
 #include "MapReduceClient.h"
-#include "MapReduceFramework.h"
+#include "MapReduceFramework_other.h"
 #include <stdlib.h>
 #include <iostream>
 #include <map>
@@ -9737,7 +9737,9 @@ int main ()
   }
   if (expectedOutput.size () != results.size())
   {
-    std::cout << "ERROR: YOU MISS SOME KEYS IN YOUR OUTPUT VEC" << std::endl;
+
+      std::cout << "ERROR: YOU MISS " << expectedOutput.size () - results.size() << " KEYS IN YOUR OUTPUT VEC" << std::endl;
+      std::cout << "expected: " << expectedOutput.size () << " results: " << results.size() << std::endl;
     exit(EXIT_FAILURE);
   }
 

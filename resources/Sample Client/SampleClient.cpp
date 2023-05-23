@@ -1,4 +1,4 @@
-#include "../../MapReduceFramework.h"
+#include "../../MapReduceFramework_other.h"
 #include <cstdio>
 #include <string>
 #include <array>

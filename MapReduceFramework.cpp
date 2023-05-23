@@ -9,224 +9,172 @@
 
 class ThreadContext
 {
- public:
-  int threadId;
-  pthread_t pthread;
+public:
+    const InputVec *inputVec;
+    Barrier *barrier{};
+    const MapReduceClient &client;
+    IntermediateVec *intVec;
+    std::atomic<int> *atomic_counter;
+    OutputVec *outVec;
+    int threadId;
+    pthread_mutex_t *mutex;
+    stage_t stage;
+    ThreadContext **thread_contexts;
+    int multiThreadLevel;
+    std::vector<IntermediateVec> *shuffled;
 
-  const InputVec *inputVec;
-  const MapReduceClient &client;
-  std::atomic<int> *atomic_counter;
-
-  Barrier *barrier{};
-  pthread_mutex_t *mutex;
-
-  IntermediateVec intermediateInnerVec;
-  std::vector<IntermediateVec> *shuffled;
-  OutputVec *outVec;
-
-  ThreadContext (int threadId,
-                 pthread_t pthread,
-                 const InputVec *inputVec,
-                 const MapReduceClient &client,
-                 std::atomic<int> *atomic_counter,
-//                 Barrier *barrier,
-                 pthread_mutex_t *mutex,
-                 std::vector<IntermediateVec> *shuffled,
-                 OutputVec *outVec) :
-      threadId (threadId),
-      pthread (pthread),
-      inputVec (inputVec),
-      client (client),
-      atomic_counter (atomic_counter),
-//      barrier (barrier),
-      mutex (mutex),
-      shuffled (shuffled),
-      outVec (outVec)
-  {}
-
-  ~ThreadContext () = default;
-};
-
-class MainThreadContext : public ThreadContext
-{
- public:
-  stage_t stage;
-  ThreadContext **thread_contexts;
-  int multiThreadLevel;
-  bool isJobDone;
-
-  MainThreadContext (int thread_id,
-                     pthread_t pthread,
-                     const InputVec *input_vec,
-                     const MapReduceClient &client,
-                     std::atomic<int> *atomic_counter,
-//                     Barrier *barrier,
-                     pthread_mutex_t *mutex,
-                     std::vector<IntermediateVec> *shuffled,
-                     OutputVec *out_vec,
-                     stage_t stage,
-                     ThreadContext **thread_contexts,
-                     int multiThreadLevel,
-                     bool isJobDone)
-      : ThreadContext (thread_id,
-                       pthread,
-                       input_vec,
-                       client,
-                       atomic_counter,
-//                       barrier,
-                       mutex,
-                       shuffled,
-                       out_vec),
-        stage (stage),
-        thread_contexts (thread_contexts),
-        multiThreadLevel (multiThreadLevel),
-        isJobDone (isJobDone)
-  {}
-
-  ~MainThreadContext () = default;
-};
-
-K2 *get_max_value (MainThreadContext *mtc)
-{
-  K2 *max_value = nullptr;
-  for (int i = 0; i < mtc->multiThreadLevel; i++)
-  {
-    if (!(mtc->thread_contexts[i]->intermediateInnerVec.empty ()))
+    ThreadContext (const MapReduceClient &client, int threadId, OutputVec *outVec, std::atomic<int> *
+    atomic_counter, pthread_mutex_t *mutex, stage_t stage, const InputVec *inputVec)
+            : client (client), threadId (threadId), outVec
+            (outVec), atomic_counter (atomic_counter), mutex (mutex), stage
+                      (stage), inputVec (inputVec)
     {
-      if (max_value == nullptr)
-      {
-        max_value = mtc->thread_contexts[i]->intermediateInnerVec.back ()
-            .first;
-      }
-      else
-      {
-
-        if (*max_value < *(mtc->thread_contexts[i]->intermediateInnerVec.back
-            ().first))
-        {
-          max_value = mtc->thread_contexts[i]->intermediateInnerVec.back ()
-              .first;
-        }
-      }
+        intVec = new IntermediateVec ();
     }
-  }
 
-  return max_value;
+    ~ThreadContext () = default;
+};
+
+struct job_handler_t
+{
+    pthread_t *threads;
+    ThreadContext *contexts;
+    Barrier *barrier;
+    IntermediateVec *intVec;
+    OutputVec *outVec;
+    int multiThreadLevel;
+    bool isJobDone;
+    pthread_mutex_t *mutex;
+};
+
+K2 *get_max_value (ThreadContext *tc)
+{
+    K2 *max_value = nullptr;
+    for (int i = 0; i < tc->multiThreadLevel; i++)
+    {
+        if (!(tc->thread_contexts[i]->intVec->empty ()))
+        {
+            /*
+          if (max_value == nullptr
+              | *max_value < *(tc->thread_contexts[i].intVec->back ().first))
+          {
+            max_value = tc->thread_contexts[i].intVec->back ().first;
+          }
+             */
+
+            if(max_value == nullptr) {
+                max_value = tc->thread_contexts[i]->intVec->back ().first;
+            } else {
+
+                if(*max_value < *(tc->thread_contexts[i]->intVec->back ().first)) {
+                    max_value = tc->thread_contexts[i]->intVec->back ().first;
+                }
+
+            }
+        }
+    }
+
+    return max_value;
 }
 
 template<typename K2> bool isEqual (const K2 *a, const K2 *b)
 {
-  return ! (*a < *b || *b < *a);
+    return ! (*a < *b || *b < *a);
 }
 
-std::vector<IntermediateVec> *shuffle (MainThreadContext *mtc)
+std::vector<IntermediateVec> *shuffle (ThreadContext *tc)
 {
-  auto vec = new std::vector<IntermediateVec> ();
-  K2 *max_value = get_max_value (mtc);
+    auto vec = new std::vector<IntermediateVec> ();
+    K2 *max_value = get_max_value (tc);
 
-  while (max_value != nullptr)
-  {
-    auto k_vec = new IntermediateVec ();
-
-    for (int i = 0; i < mtc->multiThreadLevel; i++)
+    while (max_value != nullptr)
     {
-      while ((!mtc->thread_contexts[i]->intermediateInnerVec.empty ()) &&
-             (isEqual (mtc->thread_contexts[i]
-                  ->intermediateInnerVec.back ().first, max_value)))
-      {
-        k_vec->push_back (mtc->thread_contexts[i]->intermediateInnerVec.back ());
-        mtc->thread_contexts[i]->intermediateInnerVec.pop_back ();
-      }
+        auto k_vec = new IntermediateVec ();
+
+        for (int i = 0; i < tc->multiThreadLevel; i++)
+        {
+            while ((!tc->thread_contexts[i]->intVec->empty ()) &&
+                   isEqual(tc->thread_contexts[i]
+                                   ->intVec->back ().first , max_value))
+            {
+                k_vec->push_back (tc->thread_contexts[i]->intVec->back ());
+                tc->thread_contexts[i]->intVec->pop_back ();
+            }
+        }
+        vec->push_back (*k_vec);
+        tc->atomic_counter->fetch_add(1);
+        max_value = get_max_value (tc);
     }
-    vec->push_back (*k_vec);
-    (*(mtc->atomic_counter))++;
-    max_value = get_max_value (mtc);
-  }
-  return vec;
+    return vec;
 }
 
 template<typename K2, typename V2>
 bool
 comparePairs (const std::pair<K2 *, V2 *> &pair1, const std::pair<K2 *, V2 *> &pair2)
 {
-  // Compare the K2 values of the pairs
-  return *(pair1.first) < *(pair2.first);
+    // Compare the K2 values of the pairs
+    return *(pair1.first) < *(pair2.first);
 }
 
 void *singleThread (void *arg)
 {
-  ThreadContext *tc = ((ThreadContext *) arg);
+    ThreadContext *tc = *((ThreadContext **) arg);
 
-  if (tc->threadId == 0)
-  {
-    auto mtc = (MainThreadContext *) tc;
-    mtc->stage = MAP_STAGE;
-  }
-
-  int old_value = tc->atomic_counter->fetch_add (1);
-
-  auto pair = tc->inputVec->at (old_value);
-  tc->client.map (pair.first, pair.second, tc);
-
-  // sort
-  std::sort (tc->intermediateInnerVec.begin (), tc->intermediateInnerVec.end (),
-             comparePairs<K2, V2>);
-
-
-    if (pthread_mutex_lock (tc->mutex) != 0)
+    if (tc->threadId == 0)
     {
-        fprintf (stderr, "system error: error on pthread_mutex_lock in cout before");
-        exit (1);
+        tc->stage = MAP_STAGE;
     }
 
-    std::cout << "before: " << tc->threadId << std::endl;
+    // map
+    int old_value = tc->atomic_counter->fetch_add(1);
 
-    if (pthread_mutex_unlock (tc->mutex) != 0)
-    {
-        fprintf (stderr, "system error: error on pthread_mutex_unlock in cout before");
-        exit (1);
+
+    while(old_value < tc->inputVec->size()) {
+
+        auto pair = tc->inputVec->at (old_value);
+        tc->client.map (pair.first, pair.second, tc);
+
+        old_value = tc->atomic_counter->fetch_add(1);
     }
 
-  tc->barrier->barrier ();
 
-    if (pthread_mutex_lock (tc->mutex) != 0)
+
+    // sort
+    std::sort (tc->intVec->begin (), tc->intVec->end (), comparePairs<K2, V2>);
+
+    tc->barrier->barrier ();
+
+    if (tc->threadId == 0)
     {
-        fprintf (stderr, "system error: error on pthread_mutex_lock in cout after");
-        exit (1);
+        tc->stage = SHUFFLE_STAGE;
+        tc->atomic_counter->store (0);
+        auto shuffled = shuffle (tc);
+
+        for (int i = 0; i < tc->multiThreadLevel; i++)
+        {
+            tc->thread_contexts[i]->shuffled = shuffled;
+        }
     }
 
-    std::cout << "after " << tc->threadId << std::endl;
+    // TODO: it is recommended to use semaphore instead of barrier here
+    tc->barrier->barrier ();
 
-    if (pthread_mutex_unlock (tc->mutex) != 0)
+    // reduce
+    if (tc->threadId == 0)
     {
-        fprintf (stderr, "system error: error on pthread_mutex_unlock in cout after");
-        exit (1);
+        tc->stage = REDUCE_STAGE;
     }
 
-  if (tc->threadId == 0)
-  {
-    auto mtc = (MainThreadContext *) tc;
-    mtc->stage = SHUFFLE_STAGE;
-    tc->atomic_counter->store (0);
-    mtc->shuffled = shuffle (mtc);
-  }
+    old_value = tc->atomic_counter->fetch_add(-1) - 1;
+    while(old_value >= 0)
+    {
+        auto reduce_vec = tc->shuffled->at(old_value);
+        tc->client.reduce(&reduce_vec, tc);
 
-  // TODO: it is recommended to use semaphore instead of barrier here
-  tc->barrier->barrier ();
+        old_value = tc->atomic_counter->fetch_add(-1) - 1;
+    }
 
-  // reduce
-  if (tc->threadId == 0)
-  {
-    auto mtc = (MainThreadContext *) tc;
-    mtc->stage = REDUCE_STAGE;
-  }
-
-  old_value = tc->atomic_counter->load () - 1;
-  (*(tc->atomic_counter))--;
-  auto reduce_vec = tc->shuffled->at (old_value);
-  tc->client.reduce (&reduce_vec, tc);
-
-  return 0;
+    return 0;
 }
 
 JobHandle startMapReduceJob (const MapReduceClient &client,
@@ -234,127 +182,119 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
                              OutputVec &outputVec,
                              int multiThreadLevel)
 {
-  // TODO: REMEMBER TO FREE ALL THE THREAD CONTEXTS, AND MAKE SURE THEY;RE
-  //  DYNAMIC
-  auto pthreads = new pthread_t[multiThreadLevel];
-  auto contexts = new ThreadContext *[multiThreadLevel];
+    // TODO: REMEMBER TO FREE ALL THE THREAD CONTEXTS, AND MAKE SURE THEY;RE
+    //  DYNAMIC
+    auto threads = new pthread_t[multiThreadLevel];
+    auto contexts = new ThreadContext *[multiThreadLevel];
 
-  std::vector<IntermediateVec> *shuffled;
-  auto atomic_counter = new std::atomic<int> (0);
+    //NEED MULTIPE INTERMEDIATE VECTORS
+    //auto *intVec = new IntermediateVec ();
 
-  pthread_mutex_t mutex (PTHREAD_MUTEX_INITIALIZER);
-  stage_t stage = UNDEFINED_STAGE;
+    auto *outVec = &outputVec;
+    auto atomic_counter = new std::atomic<int> (0);
 
-  auto *barrier = new Barrier (multiThreadLevel);
 
-  MainThreadContext *job_handler;
+    pthread_mutex_t mutex (PTHREAD_MUTEX_INITIALIZER);
+    stage_t stage = UNDEFINED_STAGE;
 
-  if (multiThreadLevel > 0)
-  {
-    job_handler = new MainThreadContext (0,
-                                              pthreads[0],
-                                              &inputVec,
-                                              client,
-                                              atomic_counter,
-//                                              barrier,
-                                              &mutex,
-                                              shuffled,
-                                              &outputVec,
-                                              stage,
-                                              contexts,
-                                              multiThreadLevel,
-                                              false);
+    auto *barrier = new Barrier (multiThreadLevel);
 
-    contexts[0] = job_handler;
-    contexts[0]->barrier = barrier;
-  }
-  else
-  {
-    job_handler = nullptr;
-  }
+    for (int i = 0; i < multiThreadLevel; i++)
+    {
 
-  for (int i = 1; i < multiThreadLevel; i++)
-  {
-    contexts[i] = new ThreadContext (i,
-                                     pthreads[i],
-                                     &inputVec,
-                                     client,
-                                     atomic_counter,
-//                                     barrier,
-                                     &mutex,
-                                     shuffled,
-                                     &outputVec);
-      contexts[i]->barrier = barrier;
-  }
+        contexts[i] = new ThreadContext (client, i, outVec,
+                                         atomic_counter, &mutex, stage, &
+                                                 inputVec);
+        contexts[i]->barrier = barrier;
+        contexts[i]->thread_contexts = contexts;
+        contexts[i]->multiThreadLevel = multiThreadLevel;
+    }
 
-  for (int i = 0; i < multiThreadLevel; i++)
-  {
-    pthread_create (pthreads + i, NULL, singleThread, *(contexts + i));
-  }
-  return job_handler;
+
+    auto *job_handler = new job_handler_t ();
+    job_handler->threads = threads;
+    job_handler->contexts = *contexts;
+    job_handler->barrier = barrier;
+    job_handler->outVec = outVec;
+    job_handler->multiThreadLevel = multiThreadLevel;
+    job_handler->isJobDone = false;
+    job_handler->mutex = &mutex;
+
+
+    for (int i = 0; i < multiThreadLevel; i++)
+    {
+        if(pthread_create (threads + i, NULL, singleThread, contexts + i) != 0)
+        {
+            fprintf (stderr, "system error: error in pthread_create\n");
+            exit (1);
+        }
+    }
+    return job_handler;
 }
 
 void waitForJob (JobHandle job)
 {
-  auto mtc = (MainThreadContext *) job;
-  if (!mtc->isJobDone)
-  {
-    for (int i = 0; i < mtc->multiThreadLevel; ++i)
+    auto handler = (job_handler_t *) job;
+    if (!handler->isJobDone)
     {
-      pthread_join (mtc->thread_contexts[i]->pthread, NULL);
+        for (int i = 0; i < handler->multiThreadLevel; ++i)
+        {
+            pthread_join (handler->threads[i], NULL);
+        }
     }
-  }
-  mtc->isJobDone = true;
+    handler->isJobDone = true;
 }
 
 void getJobState (JobHandle job, JobState *state)
 {
-  auto mtc = (MainThreadContext *) job;
-  stage_t stage = mtc->stage;
-  float percentage = (float) mtc->atomic_counter->load () /
-                     (float) mtc->multiThreadLevel;
-  state->stage = stage;
-  state->percentage = percentage;
+    auto handler = (job_handler_t *) job;
+    stage_t stage = handler->contexts[0].stage;
+    float percentage = (float) handler->contexts[0].atomic_counter->load () /
+                       (float) handler->multiThreadLevel;
+    state->stage = stage;
+    state->percentage = percentage;
 }
 
 void closeJobHandle (JobHandle job)
 {
-  //TODO DELETE EVERYTHING ACCORDING TO WHAT WE CHANGED, AND KNOW WHAT TO
-  // FREE FROM THE THREAD CONTEXTS AND WHAT NOT
+    //TODO DELETE EVERYTHING ACCORDING TO WHAT WE CHANGED, AND KNOW WHAT TO
+    // FREE FROM THE THREAD CONTEXTS AND WHAT NOT
 
-  waitForJob (job);
-  auto mtc = (MainThreadContext *) job;
-  std::cout << mtc->outVec->size() << std::endl;
-//  delete[] mtc->thread_contexts;
-//  delete mtc->barrier;
-//  delete[] mtc->shuffled;
-//  pthread_mutex_destroy (mtc->mutex);
+    /*
+    waitForJob (job);
+    auto handler = (job_handler_t *) job;
+    delete[] handler->threads;
+    delete[] handler->contexts;
+    delete handler->barrier;
+    delete[] handler->outVec;
+    pthread_mutex_destroy (handler->mutex);
+     */
 }
 
 void emit2 (K2 *key, V2 *value, void *context)
 {
-  auto intPair = IntermediatePair (key, value);
-  auto tc = (ThreadContext *) context;
-  tc->intermediateInnerVec.push_back (intPair);
+    auto intPair = IntermediatePair (key, value);
+    ThreadContext *tc = (ThreadContext *) context;
+    tc->intVec->push_back (intPair);
 }
 
 void emit3 (K3 *key, V3 *value, void *context)
 {
-  // TODO: do we need to add the pairs in a specific order?
+    // TODO: do we need to add the pairs in a specific order?
 
-  auto outPair = OutputPair (key, value);
-  auto tc = (ThreadContext *) context;
-  if (pthread_mutex_lock (tc->mutex) != 0)
-  {
-    fprintf (stderr, "system error: error on pthread_mutex_lock in out vec");
-    exit (1);
-  }
+    auto outPair = OutputPair (key, value);
+    ThreadContext *tc = (ThreadContext *) context;
+    if (pthread_mutex_lock (tc->mutex) != 0)
+    {
+        fprintf (stderr, "system error: error on pthread_mutex_lock");
+        exit (1);
+    }
 
-  tc->outVec->push_back (outPair);
+    tc->outVec->push_back (outPair);
 
-  if (pthread_mutex_unlock (tc->mutex) != 0)
-  {
-    fprintf (stderr, "system error: error on pthread_mutex_unlock in out vec");
-    exit (1);
-  }
+    if (pthread_mutex_unlock (tc->mutex) != 0)
+    {
+        fprintf (stderr, "system error: error on pthread_mutex_unlock");
+        exit (1);
+    }
 }

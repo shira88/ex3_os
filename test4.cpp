@@ -6,7 +6,7 @@
 #include <iostream>
 #include <sstream>
 #include "MapReduceClient.h"
-#include "MapReduceFramework.h"
+#include "MapReduceFramework_other.h"
 #define NUM_THREADS 10
 
 class Line : public K1 {

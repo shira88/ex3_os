@@ -1,5 +1,5 @@
 #include "MapReduceClient.h"
-#include "MapReduceFramework_old.h"
+#include "MapReduceFramework.h"
 #include <stdlib.h>
 #include <iostream>
 #include <map>
@@ -309,7 +309,6 @@ int main ()
   {
     int c = ((Number *) pair.first)->n;
     int count = ((Number *) pair.second)->n ;
-    std::cout  << c << ": " << count << std::endl;
     auto iter = expectedOutput.find(c);
     if (iter != expectedOutput.end())
     {
@@ -330,7 +329,6 @@ int main ()
       exit(EXIT_FAILURE);
     }
   }
-  std::cout << results.size() << std::endl;
   if (!expectedOutput.empty())
   {
     std::cout << "ERROR: YOU MISS SOME KEYS IN YOUR OUTPUT VEC" << std::endl;

@@ -1,7 +1,7 @@
 #include <iostream>
 #include <map>
 #include "MapReduceClient.h"
-#include "MapReduceFramework.h"
+#include "MapReduceFramework_other.h"
 
 #define NUM_ITERS 10000
 #define RANGE 1000
