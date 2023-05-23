@@ -1,5 +1,5 @@
 #include "MapReduceClient.h"
-#include "MapReduceFramework.h"
+#include "MapReduceFramework_old.h"
 #include <stdlib.h>
 #include <iostream>
 #include <map>
@@ -301,6 +301,10 @@ int main ()
       {199, 43},
       {200, 43}
   };
+
+
+
+
   for (OutputPair &pair : results)
   {
     int c = ((Number *) pair.first)->n;
@@ -326,6 +330,7 @@ int main ()
       exit(EXIT_FAILURE);
     }
   }
+  std::cout << results.size() << std::endl;
   if (!expectedOutput.empty())
   {
     std::cout << "ERROR: YOU MISS SOME KEYS IN YOUR OUTPUT VEC" << std::endl;

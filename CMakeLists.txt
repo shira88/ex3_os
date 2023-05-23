@@ -5,4 +5,4 @@ set(CMAKE_CXX_STANDARD 14)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
 
-add_executable(ex3 test1.cpp Barrier.cpp MapReduceFramework.h MapReduceFramework.cpp)
+add_executable(ex3 test1.cpp Barrier.cpp MapReduceFramework_old.h MapReduceFramework_old.cpp)

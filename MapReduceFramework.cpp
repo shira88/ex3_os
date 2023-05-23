@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
+#include <iostream>
 #include "MapReduceFramework.h"
 
 class ThreadContext
@@ -12,23 +13,23 @@ class ThreadContext
   int threadId;
   pthread_t pthread;
 
-  const InputVec &inputVec;
+  const InputVec *inputVec;
   const MapReduceClient &client;
   std::atomic<int> *atomic_counter;
 
-  Barrier *barrier;
+  Barrier *barrier{};
   pthread_mutex_t *mutex;
 
-  IntermediateVec *intermediateInnerVec;
+  IntermediateVec intermediateInnerVec;
   std::vector<IntermediateVec> *shuffled;
   OutputVec *outVec;
 
   ThreadContext (int threadId,
                  pthread_t pthread,
-                 const InputVec &inputVec,
+                 const InputVec *inputVec,
                  const MapReduceClient &client,
                  std::atomic<int> *atomic_counter,
-                 Barrier *barrier,
+//                 Barrier *barrier,
                  pthread_mutex_t *mutex,
                  std::vector<IntermediateVec> *shuffled,
                  OutputVec *outVec) :
@@ -37,7 +38,7 @@ class ThreadContext
       inputVec (inputVec),
       client (client),
       atomic_counter (atomic_counter),
-      barrier (barrier),
+//      barrier (barrier),
       mutex (mutex),
       shuffled (shuffled),
       outVec (outVec)
@@ -56,10 +57,10 @@ class MainThreadContext : public ThreadContext
 
   MainThreadContext (int thread_id,
                      pthread_t pthread,
-                     const InputVec &input_vec,
+                     const InputVec *input_vec,
                      const MapReduceClient &client,
                      std::atomic<int> *atomic_counter,
-                     Barrier *barrier,
+//                     Barrier *barrier,
                      pthread_mutex_t *mutex,
                      std::vector<IntermediateVec> *shuffled,
                      OutputVec *out_vec,
@@ -72,7 +73,7 @@ class MainThreadContext : public ThreadContext
                        input_vec,
                        client,
                        atomic_counter,
-                       barrier,
+//                       barrier,
                        mutex,
                        shuffled,
                        out_vec),
@@ -90,20 +91,20 @@ K2 *get_max_value (MainThreadContext *mtc)
   K2 *max_value = nullptr;
   for (int i = 0; i < mtc->multiThreadLevel; i++)
   {
-    if (!(mtc->thread_contexts[i]->intermediateInnerVec->empty ()))
+    if (!(mtc->thread_contexts[i]->intermediateInnerVec.empty ()))
     {
       if (max_value == nullptr)
       {
-        max_value = mtc->thread_contexts[i]->intermediateInnerVec->back ()
+        max_value = mtc->thread_contexts[i]->intermediateInnerVec.back ()
             .first;
       }
       else
       {
 
-        if (*max_value < *(mtc->thread_contexts[i]->intermediateInnerVec->back
+        if (*max_value < *(mtc->thread_contexts[i]->intermediateInnerVec.back
             ().first))
         {
-          max_value = mtc->thread_contexts[i]->intermediateInnerVec->back ()
+          max_value = mtc->thread_contexts[i]->intermediateInnerVec.back ()
               .first;
         }
       }
@@ -129,12 +130,12 @@ std::vector<IntermediateVec> *shuffle (MainThreadContext *mtc)
 
     for (int i = 0; i < mtc->multiThreadLevel; i++)
     {
-      while ((!mtc->thread_contexts[i]->intermediateInnerVec->empty ()) &&
+      while ((!mtc->thread_contexts[i]->intermediateInnerVec.empty ()) &&
              (isEqual (mtc->thread_contexts[i]
-                  ->intermediateInnerVec->back ().first, max_value)))
+                  ->intermediateInnerVec.back ().first, max_value)))
       {
-        k_vec->push_back (mtc->thread_contexts[i]->intermediateInnerVec->back ());
-        mtc->thread_contexts[i]->intermediateInnerVec->pop_back ();
+        k_vec->push_back (mtc->thread_contexts[i]->intermediateInnerVec.back ());
+        mtc->thread_contexts[i]->intermediateInnerVec.pop_back ();
       }
     }
     vec->push_back (*k_vec);
@@ -164,14 +165,43 @@ void *singleThread (void *arg)
 
   int old_value = tc->atomic_counter->fetch_add (1);
 
-  auto pair = tc->inputVec.at (old_value);
+  auto pair = tc->inputVec->at (old_value);
   tc->client.map (pair.first, pair.second, tc);
 
   // sort
-  std::sort (tc->intermediateInnerVec->begin (), tc->intermediateInnerVec->end (),
+  std::sort (tc->intermediateInnerVec.begin (), tc->intermediateInnerVec.end (),
              comparePairs<K2, V2>);
 
+
+    if (pthread_mutex_lock (tc->mutex) != 0)
+    {
+        fprintf (stderr, "system error: error on pthread_mutex_lock in cout before");
+        exit (1);
+    }
+
+    std::cout << "before: " << tc->threadId << std::endl;
+
+    if (pthread_mutex_unlock (tc->mutex) != 0)
+    {
+        fprintf (stderr, "system error: error on pthread_mutex_unlock in cout before");
+        exit (1);
+    }
+
   tc->barrier->barrier ();
+
+    if (pthread_mutex_lock (tc->mutex) != 0)
+    {
+        fprintf (stderr, "system error: error on pthread_mutex_lock in cout after");
+        exit (1);
+    }
+
+    std::cout << "after " << tc->threadId << std::endl;
+
+    if (pthread_mutex_unlock (tc->mutex) != 0)
+    {
+        fprintf (stderr, "system error: error on pthread_mutex_unlock in cout after");
+        exit (1);
+    }
 
   if (tc->threadId == 0)
   {
@@ -223,10 +253,10 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
   {
     job_handler = new MainThreadContext (0,
                                               pthreads[0],
-                                              inputVec,
+                                              &inputVec,
                                               client,
                                               atomic_counter,
-                                              barrier,
+//                                              barrier,
                                               &mutex,
                                               shuffled,
                                               &outputVec,
@@ -236,6 +266,7 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
                                               false);
 
     contexts[0] = job_handler;
+    contexts[0]->barrier = barrier;
   }
   else
   {
@@ -246,18 +277,19 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
   {
     contexts[i] = new ThreadContext (i,
                                      pthreads[i],
-                                     inputVec,
+                                     &inputVec,
                                      client,
                                      atomic_counter,
-                                     barrier,
+//                                     barrier,
                                      &mutex,
                                      shuffled,
                                      &outputVec);
+      contexts[i]->barrier = barrier;
   }
 
   for (int i = 0; i < multiThreadLevel; i++)
   {
-    pthread_create (pthreads + i, NULL, singleThread, contexts + i);
+    pthread_create (pthreads + i, NULL, singleThread, *(contexts + i));
   }
   return job_handler;
 }
@@ -290,8 +322,9 @@ void closeJobHandle (JobHandle job)
   //TODO DELETE EVERYTHING ACCORDING TO WHAT WE CHANGED, AND KNOW WHAT TO
   // FREE FROM THE THREAD CONTEXTS AND WHAT NOT
 
-//  waitForJob (job);
-//  auto mtc = (MainThreadContext *) job;
+  waitForJob (job);
+  auto mtc = (MainThreadContext *) job;
+  std::cout << mtc->outVec->size() << std::endl;
 //  delete[] mtc->thread_contexts;
 //  delete mtc->barrier;
 //  delete[] mtc->shuffled;
@@ -302,7 +335,7 @@ void emit2 (K2 *key, V2 *value, void *context)
 {
   auto intPair = IntermediatePair (key, value);
   auto tc = (ThreadContext *) context;
-  tc->intermediateInnerVec->push_back (intPair);
+  tc->intermediateInnerVec.push_back (intPair);
 }
 
 void emit3 (K3 *key, V3 *value, void *context)
@@ -313,15 +346,15 @@ void emit3 (K3 *key, V3 *value, void *context)
   auto tc = (ThreadContext *) context;
   if (pthread_mutex_lock (tc->mutex) != 0)
   {
-    fprintf (stderr, "system error: error on pthread_mutex_lock");
+    fprintf (stderr, "system error: error on pthread_mutex_lock in out vec");
     exit (1);
   }
 
-  tc->outVec.push_back (outPair);
+  tc->outVec->push_back (outPair);
 
   if (pthread_mutex_unlock (tc->mutex) != 0)
   {
-    fprintf (stderr, "system error: error on pthread_mutex_unlock");
+    fprintf (stderr, "system error: error on pthread_mutex_unlock in out vec");
     exit (1);
   }
 }
