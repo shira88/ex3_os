@@ -126,17 +126,17 @@ void *singleThread (void *arg)
     }
 
     // map
-
-    /*
-    int old_value = tc->atomic_counter->load ();
-    (*(tc->atomic_counter))++;
-     */
-
     int old_value = tc->atomic_counter->fetch_add(1);
 
+    while(old_value < tc->inputVec->size()) {
 
-    auto pair = tc->inputVec->at (old_value);
-    tc->client.map (pair.first, pair.second, tc);
+        auto pair = tc->inputVec->at (old_value);
+        tc->client.map (pair.first, pair.second, tc);
+
+        old_value = tc->atomic_counter->fetch_add(1);
+    }
+
+
 
     // sort
     std::sort (tc->intVec->begin (), tc->intVec->end (), comparePairs<K2, V2>);
@@ -283,12 +283,7 @@ void emit2 (K2 *key, V2 *value, void *context)
 {
     auto intPair = IntermediatePair (key, value);
     ThreadContext *tc = (ThreadContext *) context;
-
-
-
     tc->intVec->push_back (intPair);
-
-
 }
 
 void emit3 (K3 *key, V3 *value, void *context)
