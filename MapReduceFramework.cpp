@@ -390,27 +390,27 @@ void getJobState (JobHandle job, JobState *state)
 //
 //    }
 
-//    uint64_t val = handler->contexts[0].atomic_state->load();
-//
-//    stage_t stage = (stage_t)(val >> 62);
-//
-//    size_t size = (size_t)((MIDDLE_31_BITS & val) >> 31);
-//
-//    int count = (int)(LEAST_31_BITS & val);
-//
-//    if(size == 0) {
-//        state->percentage = 0;
-//    } else {
-//        state->percentage = ((float) count / (float) size) * 100;
-//    }
-//
-//    state->stage = stage;
+    uint64_t val = handler->contexts[0]->atomic_state->load();
+
+    stage_t stage = (stage_t)(val >> 62);
+
+    size_t size = (size_t)((MIDDLE_31_BITS & val) >> 31);
+
+    int count = (int)(LEAST_31_BITS & val);
+
+    if(size == 0) {
+        state->percentage = 0;
+    } else {
+        state->percentage = ((float) count / (float) size) * 100;
+    }
+
+    state->stage = stage;
 
 
-    state->stage = handler->contexts[0]->stage;
-
-    state->percentage = 100;
-    state->stage = REDUCE_STAGE;
+//    state->stage = handler->contexts[0]->stage;
+//
+//    state->percentage = 100;
+//    state->stage = REDUCE_STAGE;
 
 
 
