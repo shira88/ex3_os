@@ -1,0 +1,8 @@
+shiras, nadaveisen
+Shira Schattner (209511500), Nadav Eisen (326647898)
+EX: 3
+
+FILES:
+MapReduceFramework.cpp  -- the map reduce framework
+Barrier.h               -- h file for barrier (from the given resources)
+Barrier.cpp               -- cpp file for barrier (from the given resources)
