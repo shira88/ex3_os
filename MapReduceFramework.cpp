@@ -10,8 +10,6 @@
 #define LEAST_31_BITS 2147483647
 #define MIDDLE_31_BITS 4611686016279904256
 
-//pthread_mutex_t output_vector_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 class ThreadContext
 {
 public:
@@ -25,7 +23,7 @@ public:
     pthread_mutex_t *output_vector_mutex;
     ThreadContext **thread_contexts;
     int multiThreadLevel;
-    std::vector<IntermediateVec> *shuffled;
+    std::vector<IntermediateVec*> *shuffled;
     std::atomic<uint64_t> *atomic_state;
     std::atomic<int> *atomic_emit2_counter;
 
@@ -99,9 +97,9 @@ template<typename K2> bool isEqual (const K2 *a, const K2 *b)
     return ! (*a < *b || *b < *a);
 }
 
-std::vector<IntermediateVec> *shuffle (ThreadContext *tc)
+std::vector<IntermediateVec*> *shuffle (ThreadContext *tc)
 {
-    auto vec = new std::vector<IntermediateVec> ();
+    auto vec = new std::vector<IntermediateVec*> ();
     K2 *max_value = get_max_value (tc);
 
     while (max_value != nullptr)
@@ -118,7 +116,7 @@ std::vector<IntermediateVec> *shuffle (ThreadContext *tc)
                 inc_state(tc->atomic_state);
             }
         }
-        vec->push_back (*k_vec);
+        vec->push_back (k_vec);
         tc->atomic_counter->fetch_add(1);
         max_value = get_max_value (tc);
     }
@@ -189,7 +187,10 @@ void *singleThread (void *arg)
     {
         auto reduce_vec = tc->shuffled->at(old_value);
 
-        tc->client.reduce(&reduce_vec, tc);
+        tc->client.reduce(reduce_vec, tc);
+
+        delete reduce_vec;
+
 
         inc_state(tc->atomic_state);
 
@@ -288,7 +289,6 @@ void closeJobHandle (JobHandle job)
 {
     auto jobHandler = static_cast<job_handler_t*>(job);
 
-    // we must call it because it's the only place where we do pthread_join, and we can't count on it to be called from the outside.
     waitForJob(jobHandler);
 
     delete[] jobHandler->threads;
@@ -298,9 +298,12 @@ void closeJobHandle (JobHandle job)
     delete jobHandler->contexts[0]->atomic_state;
     delete jobHandler->contexts[0]->barrier;
     pthread_mutex_destroy(jobHandler->contexts[0]->output_vector_mutex);
+    delete jobHandler->contexts[0]->output_vector_mutex;
+    delete jobHandler->isJobDone;
 
     size_t arr_size = jobHandler->contexts[0]->multiThreadLevel;
     for(size_t i = 0; i < arr_size; i++) {
+        delete jobHandler->contexts[i]->intVec;
         delete jobHandler->contexts[i];
     }
 
