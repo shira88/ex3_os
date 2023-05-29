@@ -10,6 +10,8 @@
 #define LEAST_31_BITS 2147483647
 #define MIDDLE_31_BITS 4611686016279904256
 
+//pthread_mutex_t output_vector_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 class ThreadContext
 {
 public:
@@ -57,7 +59,6 @@ struct job_handler_t
     ThreadContext **contexts;
     int multiThreadLevel;
     std::atomic<bool> *isJobDone;
-    pthread_mutex_t *wait_for_job_mutex;
 };
 
 K2 *get_max_value (ThreadContext *tc)
@@ -212,19 +213,7 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
 
     auto atomic_state = new std::atomic<uint64_t> (0);
 
-    pthread_mutex_t output_vector_mutex;
-    if(pthread_mutex_init(&output_vector_mutex, nullptr) != 0)
-    {
-        std::cout << "System error: output_vector_mutex init" << std::endl;
-        exit(1);
-    }
-
-    pthread_mutex_t wait_for_job_mutex;
-    if(pthread_mutex_init(&wait_for_job_mutex, nullptr) != 0)
-    {
-        std::cout << "System error: wait_for_job_mutex init" << std::endl;
-        exit(1);
-    }
+    auto *output_vector_mutex = new pthread_mutex_t(PTHREAD_MUTEX_INITIALIZER);
 
     auto *barrier = new Barrier (multiThreadLevel);
 
@@ -234,7 +223,7 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
                                          i,
                                          outVec,
                                          atomic_counter,
-                                         &output_vector_mutex,
+                                         output_vector_mutex,
                                          &inputVec,
                                          atomic_state,
                                          atomic_emit2_counter);
@@ -247,8 +236,7 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
     job_handler->threads = threads;
     job_handler->contexts = contexts;
     job_handler->multiThreadLevel = multiThreadLevel;
-    job_handler->isJobDone = new std::atomic<bool> (false);;
-    job_handler->wait_for_job_mutex = &wait_for_job_mutex;
+    job_handler->isJobDone = new std::atomic<bool> (false);
 
     for (int i = 0; i < multiThreadLevel; i++)
     {
@@ -265,12 +253,6 @@ void waitForJob (JobHandle job)
 {
     auto handler = static_cast<job_handler_t *>(job);
 
-//    if(pthread_mutex_lock(handler->wait_for_job_mutex) != 0)
-//    {
-//        std::cout << "System error: wait_for_job_mutex lock failed\n";
-//        exit(1);
-//    }
-
     if (!handler->isJobDone->load())
     {
         for (int i = 0; i < handler->multiThreadLevel; ++i)
@@ -280,12 +262,6 @@ void waitForJob (JobHandle job)
 
         handler->isJobDone->store(true);
     }
-
-//    if(pthread_mutex_unlock(handler->wait_for_job_mutex) != 0)
-//    {
-//        std::cout << "System error: wait_for_job_mutex unlock failed\n";
-//        exit(1);
-//    }
 }
 
 void getJobState (JobHandle job, JobState *state)
@@ -322,7 +298,6 @@ void closeJobHandle (JobHandle job)
     delete jobHandler->contexts[0]->atomic_state;
     delete jobHandler->contexts[0]->barrier;
     pthread_mutex_destroy(jobHandler->contexts[0]->output_vector_mutex);
-    pthread_mutex_destroy(jobHandler->wait_for_job_mutex);
 
     size_t arr_size = jobHandler->contexts[0]->multiThreadLevel;
     for(size_t i = 0; i < arr_size; i++) {
