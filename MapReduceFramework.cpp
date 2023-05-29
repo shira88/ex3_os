@@ -55,9 +55,9 @@ struct job_handler_t
 {
     pthread_t *threads;
     ThreadContext **contexts;
-    Barrier *barrier;
     int multiThreadLevel;
-    bool isJobDone;
+    std::atomic<bool> *isJobDone;
+    pthread_mutex_t *wait_for_job_mutex;
 };
 
 K2 *get_max_value (ThreadContext *tc)
@@ -212,11 +212,17 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
 
     auto atomic_state = new std::atomic<uint64_t> (0);
 
-//    pthread_mutex_t output_vector_mutex (PTHREAD_MUTEX_INITIALIZER);
     pthread_mutex_t output_vector_mutex;
     if(pthread_mutex_init(&output_vector_mutex, nullptr) != 0)
     {
-        std::cout << "System error: mutex init" << std::endl;
+        std::cout << "System error: output_vector_mutex init" << std::endl;
+        exit(1);
+    }
+
+    pthread_mutex_t wait_for_job_mutex;
+    if(pthread_mutex_init(&wait_for_job_mutex, nullptr) != 0)
+    {
+        std::cout << "System error: wait_for_job_mutex init" << std::endl;
         exit(1);
     }
 
@@ -240,9 +246,9 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
     auto *job_handler = new job_handler_t ();
     job_handler->threads = threads;
     job_handler->contexts = contexts;
-    job_handler->barrier = barrier;
     job_handler->multiThreadLevel = multiThreadLevel;
-    job_handler->isJobDone = false;
+    job_handler->isJobDone = new std::atomic<bool> (false);;
+    job_handler->wait_for_job_mutex = &wait_for_job_mutex;
 
     for (int i = 0; i < multiThreadLevel; i++)
     {
@@ -258,14 +264,28 @@ JobHandle startMapReduceJob (const MapReduceClient &client,
 void waitForJob (JobHandle job)
 {
     auto handler = static_cast<job_handler_t *>(job);
-    if (!handler->isJobDone)
+
+//    if(pthread_mutex_lock(handler->wait_for_job_mutex) != 0)
+//    {
+//        std::cout << "System error: wait_for_job_mutex lock failed\n";
+//        exit(1);
+//    }
+
+    if (!handler->isJobDone->load())
     {
         for (int i = 0; i < handler->multiThreadLevel; ++i)
         {
             pthread_join (handler->threads[i], NULL);
         }
+
+        handler->isJobDone->store(true);
     }
-    handler->isJobDone = true;
+
+//    if(pthread_mutex_unlock(handler->wait_for_job_mutex) != 0)
+//    {
+//        std::cout << "System error: wait_for_job_mutex unlock failed\n";
+//        exit(1);
+//    }
 }
 
 void getJobState (JobHandle job, JobState *state)
@@ -290,24 +310,22 @@ void getJobState (JobHandle job, JobState *state)
 
 void closeJobHandle (JobHandle job)
 {
-    //TODO DELETE EVERYTHING ACCORDING TO WHAT WE CHANGED, AND KNOW WHAT TO
-    // FREE FROM THE THREAD CONTEXTS AND WHAT NOT
     auto jobHandler = static_cast<job_handler_t*>(job);
 
-//    while(!jobHandler->isJobDone){}
-    waitForJob(job);
+    // we must call it because it's the only place where we do pthread_join, and we can't count on it to be called from the outside.
+    waitForJob(jobHandler);
 
     delete[] jobHandler->threads;
     delete jobHandler->contexts[0]->shuffled;
     delete jobHandler->contexts[0]->atomic_counter;
     delete jobHandler->contexts[0]->atomic_emit2_counter;
     delete jobHandler->contexts[0]->atomic_state;
-    delete jobHandler->barrier;
+    delete jobHandler->contexts[0]->barrier;
     pthread_mutex_destroy(jobHandler->contexts[0]->output_vector_mutex);
+    pthread_mutex_destroy(jobHandler->wait_for_job_mutex);
 
     size_t arr_size = jobHandler->contexts[0]->multiThreadLevel;
     for(size_t i = 0; i < arr_size; i++) {
-        delete jobHandler->contexts[i]->intVec;
         delete jobHandler->contexts[i];
     }
 
@@ -332,7 +350,7 @@ void emit3 (K3 *key, V3 *value, void *context)
 
     if(pthread_mutex_lock(tc->output_vector_mutex) != 0)
     {
-        std::cout << "System error: output_vector_mutex lock failed (4)\n";
+        std::cerr << "System error: output_vector_mutex lock failed\n";
         exit(1);
     }
 
@@ -340,7 +358,7 @@ void emit3 (K3 *key, V3 *value, void *context)
 
     if(pthread_mutex_unlock(tc->output_vector_mutex) != 0)
     {
-        std::cout << "System error: output_vector_mutex unlock failed (4)\n";
+        std::cerr << "System error: output_vector_mutex unlock failed\n";
         exit(1);
     }
 }
