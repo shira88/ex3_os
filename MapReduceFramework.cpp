@@ -294,7 +294,8 @@ void closeJobHandle (JobHandle job)
     // FREE FROM THE THREAD CONTEXTS AND WHAT NOT
     auto jobHandler = static_cast<job_handler_t*>(job);
 
-    while(!jobHandler->isJobDone){}
+//    while(!jobHandler->isJobDone){}
+    waitForJob(job);
 
     delete[] jobHandler->threads;
     delete jobHandler->contexts[0]->shuffled;
