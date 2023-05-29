@@ -350,7 +350,7 @@ void emit3 (K3 *key, V3 *value, void *context)
 
     if(pthread_mutex_lock(tc->output_vector_mutex) != 0)
     {
-        std::cerr << "System error: output_vector_mutex lock failed\n";
+        std::cout << "System error: output_vector_mutex lock failed\n";
         exit(1);
     }
 
@@ -358,7 +358,7 @@ void emit3 (K3 *key, V3 *value, void *context)
 
     if(pthread_mutex_unlock(tc->output_vector_mutex) != 0)
     {
-        std::cerr << "System error: output_vector_mutex unlock failed\n";
+        std::cout << "System error: output_vector_mutex unlock failed\n";
         exit(1);
     }
 }
